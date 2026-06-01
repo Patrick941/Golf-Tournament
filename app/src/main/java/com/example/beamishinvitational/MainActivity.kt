@@ -3,15 +3,19 @@
 package com.example.beamishinvitational
 
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +29,9 @@ import com.example.beamishinvitational.data.*
 import com.example.beamishinvitational.ui.TournamentViewModel
 import com.example.beamishinvitational.ui.theme.BeamishInvitationalTheme
 import androidx.compose.foundation.text.KeyboardOptions
+import com.google.firebase.FirebaseApp
+import com.google.firebase.auth.FirebaseAuth
+import kotlinx.coroutines.launch
 
 sealed class Screen {
     object TournamentList : Screen()
@@ -34,96 +41,70 @@ sealed class Screen {
 }
 
 class MainActivity : ComponentActivity() {
+    companion object {
+        private const val LOG_PREFIX = "myLog"
+        fun logError(tag: String, message: String, throwable: Throwable? = null) {
+            val fullTag = "$LOG_PREFIX:$tag"
+            if (throwable != null) {
+                Log.e(fullTag, message, throwable)
+                io.sentry.Sentry.captureException(throwable)
+            } else {
+                Log.e(fullTag, message)
+                io.sentry.Sentry.captureMessage("$fullTag: $message")
+            }
+        }
+        fun logDebug(tag: String, message: String) {
+            Log.d("$LOG_PREFIX:$tag", message)
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Initialize Firebase before the ViewModel starts using it
+        try {
+            FirebaseApp.initializeApp(this)
+            logDebug("Firebase", "Firebase initialized successfully")
+            
+            // Sign in anonymously if not already signed in
+            val auth = FirebaseAuth.getInstance()
+            if (auth.currentUser == null) {
+                auth.signInAnonymously()
+                    .addOnSuccessListener {
+                        logDebug("Firebase", "Anonymous sign-in successful")
+                    }
+                    .addOnFailureListener { e ->
+                        logError("Firebase", "Anonymous sign-in failed", e)
+                    }
+            }
+        } catch (e: Exception) {
+            logError("Firebase", "Firebase initialization failed", e)
+        }
+
+        logDebug("Lifecycle", "MainActivity onCreate")
         enableEdgeToEdge()
         setContent {
             BeamishInvitationalTheme {
-                val viewModel: TournamentViewModel = viewModel()
-                var currentScreen by remember { mutableStateOf<Screen>(Screen.TournamentList) }
-                var showSettingsFor by remember { mutableStateOf<Tournament?>(null) }
-
-                fun goBack() {
-                    currentScreen = when (val screen = currentScreen) {
-                        is Screen.CreateTournament -> Screen.TournamentList
-                        is Screen.GameList -> Screen.TournamentList
-                        is Screen.ScoreEntry -> Screen.GameList(screen.tournament)
-                        else -> Screen.TournamentList
-                    }
-                }
-
-                BackHandler(enabled = currentScreen !is Screen.TournamentList) {
-                    goBack()
-                }
-
-                Scaffold(
-                    topBar = {
-                        TopAppBar(
-                            title = {
-                                Text(
-                                    when (val screen = currentScreen) {
-                                        is Screen.TournamentList -> "Tournaments"
-                                        is Screen.CreateTournament -> "New Tournament"
-                                        is Screen.GameList -> screen.tournament.name
-                                        is Screen.ScoreEntry -> screen.game.locationName
-                                    }
-                                )
-                            },
-                            navigationIcon = {
-                                if (currentScreen !is Screen.TournamentList) {
-                                    IconButton(onClick = { goBack() }) {
-                                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
-                                    }
-                                }
-                            },
-                            actions = {
-                                if (currentScreen is Screen.GameList) {
-                                    IconButton(onClick = { showSettingsFor = (currentScreen as Screen.GameList).tournament }) {
-                                        Icon(Icons.Default.Settings, contentDescription = "Settings")
-                                    }
-                                }
-                            }
+                val snackbarHostState = remember { SnackbarHostState() }
+                val scope = rememberCoroutineScope()
+                
+                fun showError(message: String) {
+                    MainActivity.logError("UI", "Displaying error to user: $message")
+                    scope.launch {
+                        snackbarHostState.showSnackbar(
+                            message = message,
+                            duration = SnackbarDuration.Long
                         )
                     }
-                ) { padding ->
-                    Box(modifier = Modifier.padding(padding).fillMaxSize()) {
-                        when (val screen = currentScreen) {
-                            is Screen.TournamentList -> TournamentListScreen(
-                                viewModel,
-                                onCreateClick = { currentScreen = Screen.CreateTournament },
-                                onTournamentClick = { currentScreen = Screen.GameList(it) }
-                            )
-                            is Screen.CreateTournament -> CreateTournamentScreen(
-                                onCreated = { name, split, players ->
-                                    viewModel.createTournament(name, split, players)
-                                    currentScreen = Screen.TournamentList
-                                }
-                            )
-                            is Screen.GameList -> GameListScreen(
-                                viewModel,
-                                screen.tournament,
-                                onGameClick = { currentScreen = Screen.ScoreEntry(screen.tournament, it) }
-                            )
-                            is Screen.ScoreEntry -> ScoreEntryScreen(
-                                viewModel,
-                                screen.tournament,
-                                screen.game
-                            )
+                }
+
+                Surface(modifier = Modifier.fillMaxSize()) {
+                    Scaffold(
+                        snackbarHost = { SnackbarHost(snackbarHostState) }
+                    ) { innerPadding ->
+                        Box(modifier = Modifier.padding(innerPadding)) {
+                            AppContent(onError = ::showError)
                         }
-                    }
-
-                    showSettingsFor?.let { tournament ->
-                        SettingsDialog(
-                            tournament = tournament,
-                            onDismiss = { showSettingsFor = null },
-                            onSave = { updatedTournament ->
-                                viewModel.updateTournament(updatedTournament)
-                                if (currentScreen is Screen.GameList && (currentScreen as Screen.GameList).tournament.id == updatedTournament.id) {
-                                    currentScreen = Screen.GameList(updatedTournament)
-                                }
-                                showSettingsFor = null
-                            }
-                        )
                     }
                 }
             }
@@ -132,19 +113,165 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
+fun AppContent(onError: (String) -> Unit) {
+    val viewModel: TournamentViewModel = viewModel()
+    val uiError by viewModel.uiError.collectAsState()
+    
+    LaunchedEffect(uiError) {
+        uiError?.let {
+            onError(it)
+            viewModel.clearError()
+        }
+    }
+
+    var currentScreen by remember { mutableStateOf<Screen>(Screen.TournamentList) }
+    var showSettingsFor by remember { mutableStateOf<Tournament?>(null) }
+
+    fun goBack() {
+        currentScreen = when (val screen = currentScreen) {
+            is Screen.CreateTournament -> Screen.TournamentList
+            is Screen.GameList -> Screen.TournamentList
+            is Screen.ScoreEntry -> Screen.GameList(screen.tournament)
+            else -> Screen.TournamentList
+        }
+    }
+
+    // Handle system back button
+    BackHandler(enabled = currentScreen !is Screen.TournamentList) {
+        goBack()
+    }
+
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        when (val screen = currentScreen) {
+                            is Screen.TournamentList -> "Tournaments"
+                            is Screen.CreateTournament -> "New Tournament"
+                            is Screen.GameList -> screen.tournament.name
+                            is Screen.ScoreEntry -> screen.game.locationName
+                        }
+                    )
+                },
+                navigationIcon = {
+                    if (currentScreen !is Screen.TournamentList) {
+                        IconButton(onClick = { goBack() }) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        }
+                    }
+                },
+                actions = {
+                    if (currentScreen is Screen.GameList) {
+                        IconButton(onClick = { showSettingsFor = (currentScreen as Screen.GameList).tournament }) {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
+                    }
+                }
+            )
+        }
+    ) { padding ->
+        Box(modifier = Modifier.padding(padding).fillMaxSize()) {
+            when (val screen = currentScreen) {
+                is Screen.TournamentList -> TournamentListScreen(
+                    viewModel,
+                    onCreateClick = { currentScreen = Screen.CreateTournament },
+                    onTournamentClick = { currentScreen = Screen.GameList(it) }
+                )
+                is Screen.CreateTournament -> CreateTournamentScreen(
+                    onCreated = { name, split, players, totalGames ->
+                        try {
+                            viewModel.createTournament(name, split, players, totalGames)
+                            currentScreen = Screen.TournamentList
+                        } catch (e: Exception) {
+                            onError("Could not create tournament: ${e.localizedMessage}")
+                        }
+                    }
+                )
+                is Screen.GameList -> GameListScreen(
+                    viewModel,
+                    screen.tournament,
+                    onGameClick = { currentScreen = Screen.ScoreEntry(screen.tournament, it) },
+                    onError = onError
+                )
+                is Screen.ScoreEntry -> ScoreEntryScreen(
+                    viewModel,
+                    screen.tournament,
+                    screen.game,
+                    onError = onError
+                )
+            }
+        }
+
+        showSettingsFor?.let { tournament ->
+            SettingsDialog(
+                tournament = tournament,
+                onDismiss = { showSettingsFor = null },
+                onSave = { updatedTournament ->
+                    try {
+                        viewModel.updateTournament(updatedTournament)
+                        if (currentScreen is Screen.GameList && (currentScreen as Screen.GameList).tournament.id == updatedTournament.id) {
+                            currentScreen = Screen.GameList(updatedTournament)
+                        }
+                        showSettingsFor = null
+                    } catch (e: Exception) {
+                        onError("Failed to save settings: ${e.localizedMessage}")
+                    }
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun ErrorFallback(message: String) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(16.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Icon(Icons.Default.Warning, contentDescription = null, tint = MaterialTheme.colorScheme.error, modifier = Modifier.size(48.dp))
+        Spacer(Modifier.height(16.dp))
+        Text("A problem occurred:", style = MaterialTheme.typography.titleMedium)
+        Text(message, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.error)
+        Spacer(Modifier.height(24.dp))
+        Text("Please try restarting the application.", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
 fun SettingsDialog(tournament: Tournament, onDismiss: () -> Unit, onSave: (Tournament) -> Unit) {
+    var name by remember { mutableStateOf(tournament.name) }
     var splitPoints by remember { mutableStateOf(tournament.splitPointsOnTie) }
     var distribution by remember { mutableStateOf(tournament.pointsDistribution) }
+    var totalGamesText by remember { mutableStateOf(tournament.totalGames.toString()) }
+    var hioGameText by remember { mutableStateOf(tournament.holeInOneBonusGame.toString()) }
+    var hioTournamentText by remember { mutableStateOf(tournament.holeInOneBonusTournament.toString()) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("Tournament Settings") },
         text = {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Tournament Name") },
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(modifier = Modifier.height(16.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = splitPoints, onCheckedChange = { splitPoints = it })
                     Text("Split points on ties (vs both get 1)")
                 }
+                Spacer(modifier = Modifier.height(16.dp))
+                OutlinedTextField(
+                    value = totalGamesText,
+                    onValueChange = { totalGamesText = it },
+                    label = { Text("Total Games") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.fillMaxWidth()
+                )
                 Spacer(modifier = Modifier.height(16.dp))
                 OutlinedTextField(
                     value = distribution,
@@ -154,14 +281,53 @@ fun SettingsDialog(tournament: Tournament, onDismiss: () -> Unit, onSave: (Tourn
                     modifier = Modifier.fillMaxWidth()
                 )
                 Text(
-                    "Points awarded for rank 1, 2, 3, etc. Comma separated.",
+                    "Comma separated points for 1st, 2nd, 3rd, etc.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+                Text("Hole-in-One Bonuses", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(
+                    value = hioGameText,
+                    onValueChange = { hioGameText = it },
+                    label = { Text("Game Bonus Points") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Added to hole points before game rank is decided.",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(top = 4.dp)
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = hioTournamentText,
+                    onValueChange = { hioTournamentText = it },
+                    label = { Text("Tournament Bonus Points") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Text(
+                    "Added directly to the overall tournament standings.",
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(top = 4.dp)
                 )
             }
         },
         confirmButton = {
-            Button(onClick = { onSave(tournament.copy(splitPointsOnTie = splitPoints, pointsDistribution = distribution)) }) {
+            Button(onClick = { 
+                val totalGames = totalGamesText.toIntOrNull() ?: tournament.totalGames
+                val hioGame = hioGameText.toDoubleOrNull() ?: tournament.holeInOneBonusGame
+                val hioTournament = hioTournamentText.toDoubleOrNull() ?: tournament.holeInOneBonusTournament
+                onSave(tournament.copy(
+                    name = name, 
+                    splitPointsOnTie = splitPoints, 
+                    pointsDistribution = distribution,
+                    totalGames = totalGames,
+                    holeInOneBonusGame = hioGame,
+                    holeInOneBonusTournament = hioTournament
+                )) 
+            }) {
                 Text("Save")
             }
         },
@@ -203,10 +369,11 @@ fun TournamentListScreen(
 }
 
 @Composable
-fun CreateTournamentScreen(onCreated: (String, Boolean, List<String>) -> Unit) {
+fun CreateTournamentScreen(onCreated: (String, Boolean, List<String>, Int) -> Unit) {
     var name by remember { mutableStateOf("") }
     var splitPoints by remember { mutableStateOf(false) }
     var playersText by remember { mutableStateOf("") }
+    var totalGamesText by remember { mutableStateOf("10") }
 
     Column(modifier = Modifier.padding(16.dp).fillMaxWidth()) {
         OutlinedTextField(
@@ -223,6 +390,14 @@ fun CreateTournamentScreen(onCreated: (String, Boolean, List<String>) -> Unit) {
         }
         Spacer(modifier = Modifier.height(16.dp))
         OutlinedTextField(
+            value = totalGamesText,
+            onValueChange = { totalGamesText = it },
+            label = { Text("Total Games") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(modifier = Modifier.height(16.dp))
+        OutlinedTextField(
             value = playersText,
             onValueChange = { playersText = it },
             label = { Text("Player Names (comma separated)") },
@@ -233,8 +408,9 @@ fun CreateTournamentScreen(onCreated: (String, Boolean, List<String>) -> Unit) {
         Button(
             onClick = {
                 val players = playersText.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+                val totalGames = totalGamesText.toIntOrNull() ?: 10
                 if (name.isNotEmpty() && players.isNotEmpty()) {
-                    onCreated(name, splitPoints, players)
+                    onCreated(name, splitPoints, players, totalGames)
                 }
             },
             modifier = Modifier.align(Alignment.End)
@@ -245,13 +421,23 @@ fun CreateTournamentScreen(onCreated: (String, Boolean, List<String>) -> Unit) {
 }
 
 @Composable
-fun GameListScreen(viewModel: TournamentViewModel, tournament: Tournament, onGameClick: (Game) -> Unit) {
+fun GameListScreen(
+    viewModel: TournamentViewModel, 
+    tournament: Tournament, 
+    onGameClick: (Game) -> Unit,
+    onError: (String) -> Unit
+) {
     val games by viewModel.getGames(tournament.id).collectAsState(initial = emptyList())
     val players by viewModel.getPlayers(tournament.id).collectAsState(initial = emptyList())
     val allScores by viewModel.getTournamentScores(tournament.id).collectAsState(initial = emptyList())
 
     val overallResults = remember(players, games, allScores, tournament) {
-        calculateOverallTournamentResults(players, games, allScores, tournament)
+        try {
+            calculateOverallTournamentResults(players, games, allScores, tournament)
+        } catch (e: Exception) {
+            MainActivity.logError("Standings", "Error calculating overall tournament results", e)
+            emptyMap<String, Double>()
+        }
     }
 
     LazyColumn {
@@ -261,10 +447,10 @@ fun GameListScreen(viewModel: TournamentViewModel, tournament: Tournament, onGam
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(16.dp)
             )
-            TournamentStandingsTable(players, overallResults)
+             TournamentStandingsTable(players, overallResults)
             HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
             Text(
-                "Course Results / Games",
+                "Games / Courses",
                 style = MaterialTheme.typography.titleLarge,
                 modifier = Modifier.padding(horizontal = 16.dp)
             )
@@ -274,13 +460,22 @@ fun GameListScreen(viewModel: TournamentViewModel, tournament: Tournament, onGam
         items(games) { game ->
             var isEditingName by remember { mutableStateOf(false) }
             var editedName by remember { mutableStateOf(game.locationName) }
+            var showManualWinners by remember { mutableStateOf(false) }
             
             val gameScores = allScores.filter { it.gameId == game.id }
             val hasResults = gameScores.any { it.strokes > 0 }
             
-            val gameLeader = if (hasResults) {
-                val results = calculateHolePointsAccumulatedInternal(players, gameScores, tournament.splitPointsOnTie)
-                results.entries.maxByOrNull { it.value }?.key?.name
+            val gameLeader = if (!game.manualRanks.isNullOrEmpty()) {
+                val winnerId = game.manualRanks.split(",").firstOrNull()
+                players.find { it.id == winnerId }?.name
+            } else if (hasResults) {
+                try {
+                    val results = calculateHolePointsAccumulatedInternal(players, gameScores, tournament.splitPointsOnTie)
+                    results.entries.maxByOrNull { it.value }?.key?.name
+                } catch (e: Exception) {
+                    MainActivity.logError("GameList", "Error determining game leader for ${game.locationName}", e)
+                    null
+                }
             } else null
 
             ListItem(
@@ -292,8 +487,12 @@ fun GameListScreen(viewModel: TournamentViewModel, tournament: Tournament, onGam
                             modifier = Modifier.fillMaxWidth(),
                             trailingIcon = {
                                 IconButton(onClick = {
-                                    viewModel.updateGame(game.copy(locationName = editedName))
-                                    isEditingName = false
+                                    try {
+                                        viewModel.updateGame(game.copy(locationName = editedName))
+                                        isEditingName = false
+                                    } catch (e: Exception) {
+                                        onError("Update failed: ${e.localizedMessage}")
+                                    }
                                 }) {
                                     Icon(Icons.Default.Check, contentDescription = "Save")
                                 }
@@ -305,30 +504,115 @@ fun GameListScreen(viewModel: TournamentViewModel, tournament: Tournament, onGam
                 },
                 supportingContent = {
                     Column {
-                        Text("Game ${game.gameOrder} of 10")
+                        Text("Game ${game.gameOrder} of ${tournament.totalGames}")
                         if (gameLeader != null) {
-                            Text("Current Leader: $gameLeader", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
+                            val prefix = if (!game.manualRanks.isNullOrEmpty()) "Winner (Manual): " else "Current Leader: "
+                            Text("$prefix$gameLeader", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                         } else {
                              Text("No scores yet", style = MaterialTheme.typography.bodySmall)
                         }
                     }
                 },
                 trailingContent = {
-                    if (!isEditingName) {
-                        IconButton(onClick = { isEditingName = true }) {
-                            Icon(Icons.Default.Edit, contentDescription = "Edit Name")
+                    Row {
+                        if (!isEditingName) {
+                            IconButton(onClick = { showManualWinners = true }) {
+                                Icon(
+                                    Icons.Default.Star,
+                                    contentDescription = "Set Manual Winners",
+                                    tint = if (game.manualRanks.isNullOrEmpty()) MaterialTheme.colorScheme.outlineVariant else MaterialTheme.colorScheme.primary
+                                )
+                            }
+                            IconButton(onClick = { isEditingName = true }) {
+                                Icon(Icons.Default.Edit, contentDescription = "Edit Name")
+                            }
                         }
                     }
                 },
                 modifier = Modifier.clickable { if (!isEditingName) onGameClick(game) }
             )
             HorizontalDivider()
+
+            if (showManualWinners) {
+                ManualWinnersDialog(
+                    players = players,
+                    initialRanks = game.manualRanks,
+                    onDismiss = { showManualWinners = false },
+                    onSave = { newRanks ->
+                        viewModel.updateGame(game.copy(manualRanks = newRanks))
+                        showManualWinners = false
+                    }
+                )
+            }
         }
     }
 }
 
 @Composable
-fun TournamentStandingsTable(players: List<Player>, results: Map<Long, Double>) {
+fun ManualWinnersDialog(
+    players: List<Player>,
+    initialRanks: String?,
+    onDismiss: () -> Unit,
+    onSave: (String?) -> Unit
+) {
+    val initialSelectedIds = remember(initialRanks) {
+        initialRanks?.split(",")?.filter { it.isNotBlank() } ?: emptyList()
+    }
+    var selectedPlayerIds by remember { mutableStateOf(initialSelectedIds) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Set Manual Winners") },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Text(
+                    "Tap players in order of rank (1st, 2nd, 3rd...)",
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(bottom = 8.dp)
+                )
+                
+                if (selectedPlayerIds.isNotEmpty()) {
+                    Text("Current Ranking:", fontWeight = FontWeight.Bold)
+                    selectedPlayerIds.forEachIndexed { index, id ->
+                        val name = players.find { it.id == id }?.name ?: "Unknown"
+                        Text("${index + 1}. $name", style = MaterialTheme.typography.bodyMedium)
+                    }
+                    TextButton(onClick = { selectedPlayerIds = emptyList() }, modifier = Modifier.align(Alignment.End)) {
+                        Text("Clear All")
+                    }
+                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                }
+
+                Text("Available Players:", fontWeight = FontWeight.Bold)
+                LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                    val remainingPlayers = players.filter { it.id !in selectedPlayerIds }
+                    items(remainingPlayers) { player ->
+                        ListItem(
+                            headlineContent = { Text(player.name) },
+                            modifier = Modifier.clickable {
+                                selectedPlayerIds = selectedPlayerIds + player.id
+                            }
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = { 
+                val ranks = if (selectedPlayerIds.isEmpty()) null else selectedPlayerIds.joinToString(",")
+                onSave(ranks) 
+            }) {
+                Text("Save")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("Cancel") }
+        }
+    )
+}
+
+@Composable
+fun TournamentStandingsTable(players: List<Player>, results: Map<String, Double>) {
     val sortedResults = results.toList().sortedByDescending { it.second }
     val hasAnyPoints = sortedResults.any { it.second > 0 }
 
@@ -337,18 +621,24 @@ fun TournamentStandingsTable(players: List<Player>, results: Map<Long, Double>) 
             Row(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                 Text("Pos", modifier = Modifier.width(40.dp), style = MaterialTheme.typography.labelLarge)
                 Text("Player", modifier = Modifier.weight(1f), style = MaterialTheme.typography.labelLarge)
-                Text("Rank Pts", style = MaterialTheme.typography.labelLarge)
+                Text("Total Pts", style = MaterialTheme.typography.labelLarge)
             }
             HorizontalDivider()
             if (!hasAnyPoints) {
-                Text("No scores entered yet.", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
+                Text("No tournament results yet.", modifier = Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
             } else {
                 sortedResults.forEachIndexed { index, (playerId, points) ->
                     val playerName = players.find { it.id == playerId }?.name ?: "Unknown"
                     Row(modifier = Modifier.fillMaxWidth().padding(8.dp)) {
                         Text("${index + 1}", modifier = Modifier.width(40.dp))
                         Text(playerName, modifier = Modifier.weight(1f))
-                        Text("%.1f".format(points))
+                        val pointsText = try {
+                            "%.1f".format(points)
+                        } catch (e: Exception) {
+                            MainActivity.logError("Standings", "Error formatting points ($points) for player $playerName", e)
+                            "-"
+                        }
+                        Text(pointsText)
                     }
                 }
             }
@@ -361,26 +651,53 @@ fun calculateOverallTournamentResults(
     games: List<Game>,
     allScores: List<Score>,
     tournament: Tournament
-): Map<Long, Double> {
-    val totalTournamentPoints = mutableMapOf<Long, Double>()
+): Map<String, Double> {
+    val totalTournamentPoints = mutableMapOf<String, Double>()
     players.forEach { totalTournamentPoints[it.id] = 0.0 }
 
     val dist = tournament.pointsDistribution.split(",").mapNotNull { it.trim().toDoubleOrNull() }
 
     games.forEach { game ->
         val gameScores = allScores.filter { it.gameId == game.id }
-        if (gameScores.any { it.strokes > 0 }) {
-            val playerHolePoints = mutableMapOf<Long, Double>()
-            for (h in 1..18) {
-                val holeScores = gameScores.filter { it.holeNumber == h }
-                if (holeScores.isNotEmpty()) {
-                    val pts = ScoringEngine.calculateHolePoints(holeScores, tournament.splitPointsOnTie)
-                    pts.forEach { (pid, p) -> playerHolePoints[pid] = (playerHolePoints[pid] ?: 0.0) + p }
-                }
+        
+        // Add Tournament-level Hole-in-One bonus (awarded directly to overall total)
+        if (tournament.holeInOneBonusTournament > 0) {
+            gameScores.filter { it.strokes == 1 }.forEach { hioScore ->
+                totalTournamentPoints[hioScore.playerId] = (totalTournamentPoints[hioScore.playerId] ?: 0.0) + tournament.holeInOneBonusTournament
             }
-            if (playerHolePoints.values.any { it > 0 }) {
-                val gamePoints = ScoringEngine.calculateGamePoints(playerHolePoints, players.map { it.id }, dist)
-                gamePoints.forEach { (pid, p) -> totalTournamentPoints[pid] = (totalTournamentPoints[pid] ?: 0.0) + p }
+        }
+
+        val manualRankIds = game.manualRanks?.split(",")?.filter { it.isNotBlank() }
+        
+        if (!manualRankIds.isNullOrEmpty()) {
+            manualRankIds.forEachIndexed { index, playerId ->
+                val p = if (index < dist.size) dist[index] else 0.0
+                totalTournamentPoints[playerId] = (totalTournamentPoints[playerId] ?: 0.0) + p
+            }
+        } else {
+            if (gameScores.any { it.strokes > 0 }) {
+                val playerHolePoints = mutableMapOf<String, Double>()
+                for (h in 1..18) {
+                    val holeScores = gameScores.filter { it.holeNumber == h }
+                    if (holeScores.isNotEmpty()) {
+                        val pts = ScoringEngine.calculateHolePoints(holeScores, tournament.splitPointsOnTie)
+                        pts.forEach { (pid, p) -> playerHolePoints[pid] = (playerHolePoints[pid] ?: 0.0) + p }
+                    }
+                }
+                
+                // Add Game-level Hole-in-One bonus (awarded to game total points before rank calculation?)
+                // Actually, the request says "give the bonus points for either the individual game or the overall tournament".
+                // If it's for the individual game, it usually means it boosts your score for that specific game leader board.
+                if (tournament.holeInOneBonusGame > 0) {
+                    gameScores.filter { it.strokes == 1 }.forEach { hioScore ->
+                        playerHolePoints[hioScore.playerId] = (playerHolePoints[hioScore.playerId] ?: 0.0) + tournament.holeInOneBonusGame
+                    }
+                }
+
+                if (playerHolePoints.values.any { it > 0 }) {
+                    val gamePoints = ScoringEngine.calculateGamePoints(playerHolePoints, players.map { it.id }, dist)
+                    gamePoints.forEach { (pid, p) -> totalTournamentPoints[pid] = (totalTournamentPoints[pid] ?: 0.0) + p }
+                }
             }
         }
     }
@@ -388,9 +705,14 @@ fun calculateOverallTournamentResults(
 }
 
 @Composable
-fun ScoreEntryScreen(viewModel: TournamentViewModel, tournament: Tournament, game: Game) {
+fun ScoreEntryScreen(
+    viewModel: TournamentViewModel, 
+    tournament: Tournament, 
+    game: Game,
+    onError: (String) -> Unit
+) {
     val players by viewModel.getPlayers(tournament.id).collectAsState(initial = emptyList())
-    val scores by viewModel.getScores(game.id).collectAsState(initial = emptyList())
+    val scores by viewModel.getScores(tournament.id, game.id).collectAsState(initial = emptyList())
     
     var selectedHole by remember { mutableIntStateOf(1) }
 
@@ -422,7 +744,11 @@ fun ScoreEntryScreen(viewModel: TournamentViewModel, tournament: Tournament, gam
                             scoreText = it
                             it.toIntOrNull()?.let { strokes ->
                                 if (strokes >= 0) {
-                                    viewModel.saveScore(game.id, player.id, selectedHole, strokes)
+                                    try {
+                                        viewModel.saveScore(tournament.id, game.id, player.id, selectedHole, strokes)
+                                    } catch (e: Exception) {
+                                        onError("Save failed: ${e.localizedMessage}")
+                                    }
                                 }
                             }
                         },
@@ -437,12 +763,18 @@ fun ScoreEntryScreen(viewModel: TournamentViewModel, tournament: Tournament, gam
                 item {
                     HorizontalDivider(modifier = Modifier.padding(vertical = 16.dp))
                     Text(
-                        "Individual Hole Points (Holes 1-18 Total)",
+                        "Individual Hole Points Total (Game Leaderboard)",
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp)
                     )
                     
-                    val results = calculateHolePointsAccumulatedInternal(players, scores, tournament.splitPointsOnTie)
+                    val results = try {
+                        calculateHolePointsAccumulatedInternal(players, scores, tournament.splitPointsOnTie)
+                    } catch (e: Exception) {
+                        MainActivity.logError("ScoreEntry", "Error calculating accumulated hole points for game ${game.locationName}", e)
+                        emptyMap<Player, Double>()
+                    }
+
                     results.entries.sortedByDescending { it.value }.forEach { (player, points) ->
                         ListItem(
                             headlineContent = { Text(player.name) },
@@ -459,8 +791,9 @@ fun ScoreEntryScreen(viewModel: TournamentViewModel, tournament: Tournament, gam
 private fun calculateHolePointsAccumulatedInternal(players: List<Player>, scores: List<Score>, splitPoints: Boolean): Map<Player, Double> {
     if (players.isEmpty()) return emptyMap()
     
-    val playerHolePoints = mutableMapOf<Long, Double>()
+    val playerHolePoints = mutableMapOf<String, Double>()
     
+    // Sum up hole points across all 18 holes
     for (h in 1..18) {
         val holeScores = scores.filter { it.holeNumber == h }
         if (holeScores.isNotEmpty()) {

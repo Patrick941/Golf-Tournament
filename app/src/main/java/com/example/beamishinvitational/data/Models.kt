@@ -4,14 +4,20 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.ForeignKey
 import androidx.room.Index
+import java.util.UUID
 
 @Entity(tableName = "tournaments")
 data class Tournament(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
     val name: String,
     val splitPointsOnTie: Boolean = false,
-    val pointsDistribution: String = "10,8,6,4,2,1" // Default distribution
-)
+    val pointsDistribution: String = "10,8,6,4,2,1",
+    val totalGames: Int = 10,
+    val holeInOneBonusGame: Double = 0.0,
+    val holeInOneBonusTournament: Double = 0.0
+) {
+    constructor() : this(UUID.randomUUID().toString(), "", false, "10,8,6,4,2,1", 10, 0.0, 0.0)
+}
 
 @Entity(
     tableName = "players",
@@ -26,10 +32,12 @@ data class Tournament(
     indices = [Index("tournamentId")]
 )
 data class Player(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val tournamentId: Long,
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val tournamentId: String,
     val name: String
-)
+) {
+    constructor() : this(UUID.randomUUID().toString(), "", "")
+}
 
 @Entity(
     tableName = "games",
@@ -44,11 +52,14 @@ data class Player(
     indices = [Index("tournamentId")]
 )
 data class Game(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val tournamentId: Long,
+    @PrimaryKey val id: String = UUID.randomUUID().toString(),
+    val tournamentId: String,
     val locationName: String,
-    val gameOrder: Int // 1 to 10
-)
+    val gameOrder: Int,
+    val manualRanks: String? = null
+) {
+    constructor() : this(UUID.randomUUID().toString(), "", "", 0, null)
+}
 
 @Entity(
     tableName = "scores",
@@ -66,12 +77,15 @@ data class Game(
             onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index("gameId"), Index("playerId")]
+    indices = [Index("gameId"), Index("playerId"), Index("tournamentId")]
 )
 data class Score(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0,
-    val gameId: Long,
-    val playerId: Long,
-    val holeNumber: Int, // 1 to 18
+    @PrimaryKey val id: String, // Predictable ID: gameId_playerId_hole
+    val tournamentId: String,
+    val gameId: String,
+    val playerId: String,
+    val holeNumber: Int,
     val strokes: Int
-)
+) {
+    constructor() : this("", "", "", "", 0, 0)
+}

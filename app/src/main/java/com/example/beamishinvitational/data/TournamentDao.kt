@@ -5,8 +5,8 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TournamentDao {
-    @Insert
-    suspend fun insertTournament(tournament: Tournament): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertTournament(tournament: Tournament)
 
     @Update
     suspend fun updateTournament(tournament: Tournament)
@@ -15,32 +15,29 @@ interface TournamentDao {
     fun getAllTournaments(): Flow<List<Tournament>>
 
     @Query("SELECT * FROM tournaments WHERE id = :id")
-    suspend fun getTournamentById(id: Long): Tournament?
+    suspend fun getTournamentById(id: String): Tournament?
 
-    @Insert
-    suspend fun insertPlayer(player: Player): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertPlayer(player: Player)
 
     @Query("SELECT * FROM players WHERE tournamentId = :tournamentId")
-    fun getPlayersForTournament(tournamentId: Long): Flow<List<Player>>
+    fun getPlayersForTournament(tournamentId: String): Flow<List<Player>>
 
-    @Insert
-    suspend fun insertGame(game: Game): Long
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGame(game: Game)
 
     @Update
     suspend fun updateGame(game: Game)
 
     @Query("SELECT * FROM games WHERE tournamentId = :tournamentId ORDER BY gameOrder ASC")
-    fun getGamesForTournament(tournamentId: Long): Flow<List<Game>>
+    fun getGamesForTournament(tournamentId: String): Flow<List<Game>>
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertScore(score: Score)
 
     @Query("SELECT * FROM scores WHERE gameId = :gameId")
-    fun getScoresForGame(gameId: Long): Flow<List<Score>>
+    fun getScoresForGame(gameId: String): Flow<List<Score>>
 
-    @Query("SELECT scores.* FROM scores INNER JOIN games ON scores.gameId = games.id WHERE games.tournamentId = :tournamentId")
-    fun getScoresForTournament(tournamentId: Long): Flow<List<Score>>
-
-    @Query("SELECT * FROM scores WHERE gameId = :gameId AND holeNumber = :holeNumber")
-    suspend fun getScoresForHole(gameId: Long, holeNumber: Int): List<Score>
+    @Query("SELECT * FROM scores WHERE tournamentId = :tournamentId")
+    fun getScoresForTournament(tournamentId: String): Flow<List<Score>>
 }

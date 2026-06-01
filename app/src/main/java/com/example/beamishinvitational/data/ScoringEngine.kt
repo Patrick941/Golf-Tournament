@@ -10,7 +10,7 @@ object ScoringEngine {
     fun calculateHolePoints(
         scores: List<Score>,
         splitPoints: Boolean
-    ): Map<Long, Double> {
+    ): Map<String, Double> {
         // Filter out non-positive stroke entries (initial state or incomplete)
         val validScores = scores.filter { it.strokes > 0 }
         if (validScores.isEmpty()) return emptyMap()
@@ -24,7 +24,7 @@ object ScoringEngine {
             1.0
         }
 
-        val results = mutableMapOf<Long, Double>()
+        val results = mutableMapOf<String, Double>()
         winners.forEach { results[it.playerId] = pointsPerWinner }
         
         return results
@@ -36,10 +36,10 @@ object ScoringEngine {
      * If there are more players than distribution entries, the rest get 0.
      */
     fun calculateGamePoints(
-        playerHolePoints: Map<Long, Double>,
-        allPlayerIds: List<Long>,
+        playerHolePoints: Map<String, Double>,
+        allPlayerIds: List<String>,
         distribution: List<Double>
-    ): Map<Long, Double> {
+    ): Map<String, Double> {
         if (allPlayerIds.isEmpty()) return emptyMap()
 
         // If no one has any hole points yet (points > 0), everyone gets 0 game points
@@ -53,7 +53,7 @@ object ScoringEngine {
         // Sort players by their hole points (higher points = better rank)
         val sortedPlayers = fullPointsMap.toList().sortedByDescending { it.second }
         
-        val gamePointsMap = mutableMapOf<Long, Double>()
+        val gamePointsMap = mutableMapOf<String, Double>()
         
         sortedPlayers.forEachIndexed { index, (playerId, _) ->
             val points = if (index < distribution.size) distribution[index] else 0.0
